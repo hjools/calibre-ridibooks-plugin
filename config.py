@@ -89,6 +89,8 @@ DEFAULT_GENRE_MAPPINGS = {
                 'Language > Writing': ['Writing'],
                 'Writing > Essays': ['Writing'],
                 'Young Adult': ['Young Adult'],
+                u'로맨스 웹소설': [u'로맨스'],
+                u'판타지물': [u'판타지']
                 }
 
 DEFAULT_STORE_VALUES = {

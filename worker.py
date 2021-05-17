@@ -14,6 +14,7 @@ from threading import Thread
 import lxml.html
 import json
 
+from calibre import as_unicode
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.library.comments import sanitize_comments_html
 from calibre.utils.cleantext import clean_ascii_chars, unescape
@@ -48,7 +49,7 @@ class Worker(Thread): # Get details
                 'por': ('Portuguese', 'Português'),
                 }
         self.lang_map = {}
-        for code, names in lm.iteritems():
+        for code, names in lm.items():
             for name in names:
                 self.lang_map[name] = code
 
@@ -59,6 +60,8 @@ class Worker(Thread): # Get details
             self.log.exception('get_details failed for url: %r'%self.url)
 
     def load_details(self, url, timeout):
+        self.log.info('Loading details')
+
         def _format_item(str):
             return re.sub('^"(.*)"$', '\\1', unescape(str))
 
@@ -77,27 +80,40 @@ class Worker(Thread): # Get details
         try:
             response = self.browser.open(url, timeout=timeout)
             root = lxml.html.fromstring(response.read())
+            # self.log.info(lxml.html.tostring(root))
 
             # <meta> tag에서 불러오는 항목
             # 책ID, 제목, ISBN, 이미지URL, 평점
-            meta = root.xpath('//meta[starts-with(@property, "og") or starts-with(@property, "books")]')
+            meta = root.xpath('//head/meta[starts-with(@property, "og") or starts-with(@property, "books")]')
 
             # schema.org JSON에서 불러오는 항목
             # 제목, 저자, 책소개, 출판사
-            ld_json = root.xpath('//script[@type="application/ld+json"]/text()')
-            ld = [json.loads(_) for _ in ld_json]
-            book_info = [_ for _ in ld if _['@type'] == 'Book'][0]
+            ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
+            ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
+            ld = ld.replace('&lt;', '<')
+            ld = ld.replace('&gt;', '>')
+            ld = ld.replace('\&quot;', '\\"')
+            ld = ld.replace('&quot;', '\\"')
+            book_info = json.loads(ld)
+            # self.log.info(book_info)
+
         except Exception as e:
             self.log.exception(e)
 
-        ridibooks_id = re.search('id=([0-9]+)', url).group(1)
+        x = url.split("/books/")
+        y = x[1].split("?_")
+        ridibooks_id = y[0]
+
         isbn = _find_meta(meta, 'books:isbn')
         cover_url = _find_meta(meta, 'og:image')
 
         title = _find_meta(meta, 'og:title')
+        # authors = _format_list(self.book['author'])
         authors = _format_list(book_info['author']['name'])
-        if book_info.has_key('translator'):
+
+        if 'translator' in book_info:
             authors.extend([_ + u'(역자)' for _ in _format_list(book_info['translator']['name'])])
+            # authors.extend([_ + u'(역자)' for _ in _format_list(self.book['translator'])])
 
         mi = Metadata(title, authors)
         mi.set_identifier('ridibooks', ridibooks_id)
@@ -105,13 +121,17 @@ class Worker(Thread): # Get details
         mi.cover_url = cover_url
         mi.has_cover = bool(cover_url)
 
+        # mi.publisher = self.book['publisher']
         mi.publisher = _format_item(book_info['publisher']['name'])
         mi.pubdate = _format_date(book_info['datePublished'])
 
         mi.comments = _format_item(book_info['description'])
         mi.rating = float(_find_meta(meta, 'books:rating:normalized_value'))
 
-        series = re.search(u'(.*)\s*(\d+)권', title)
+        if title.endswith('권'):
+            series = re.search(u'(.*)\s*(\d+)권', title)
+        else:
+            series = re.search(u'(.*)\s*(\d+)화', title)
         if series:
             mi.series = series.group(1)
             mi.series_index = float(series.group(2))
@@ -125,31 +145,62 @@ class Worker(Thread): # Get details
             if cover_url:
                 self.plugin.cache_identifier_to_cover_url(ridibooks_id, cover_url)
 
+        mi.tags = self.parse_tags(root)
+
         self.plugin.clean_downloaded_metadata(mi)
         self.result_queue.put(mi)
+
 
     def parse_tags(self, root):
         # Goodreads does not have "tags", but it does have Genres (wrapper around popular shelves)
         # We will use those as tags (with a bit of massaging)
-        genres_node = root.xpath('//div[@class="stacked"]/div/div/div[contains(@class, "bigBoxContent")]/div/div[@class="left"]')
+        self.log.info("Parsing tags")
+        ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
+        ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
+        ld = ld.replace('&lt;', '<')
+        ld = ld.replace('&gt;', '>')
+        ld = ld.replace('\&quot;', '\\"')
+        ld = ld.replace('&quot;', '\\"')
+        book_info = json.loads(ld)
+        all_tags = list()
+        if 'keywords' in book_info:
+            keywords = book_info['keywords']
+            keywords = keywords[1:len(keywords)-1]
+            keywords_list = keywords.split("\", \"")
+            # self.log.info(keywords_list)
+            all_tags = keywords_list
+
+        genres_node = root.xpath('//p[@class="info_category_wrap"]')
         #self.log.info("Parsing tags")
         if genres_node:
             #self.log.info("Found genres_node")
             genre_tags = list()
+            added_main_genre = False
             for genre_node in genres_node:
-                sub_genre_nodes = genre_node.xpath('a')
+                if not added_main_genre:
+                    main_genre_node = genre_node.xpath('a[1]')[0].text_content()
+                    genre_tags.append(main_genre_node)
+                    added_main_genre = True
+                sub_genre_nodes = genre_node.xpath('span[@class="icon-arrow_2_right"]/following-sibling::a[1]')
                 genre_tags_list = [sgn.text_content().strip() for sgn in sub_genre_nodes]
                 #self.log.info("Found genres_tags list:", genre_tags_list)
                 if genre_tags_list:
-                    genre_tags.append(' > '.join(genre_tags_list))
-            calibre_tags = self._convert_genres_to_calibre_tags(genre_tags)
-            if len(calibre_tags) > 0:
-                return calibre_tags
+                    # genre_tags.append(' > '.join(genre_tags_list))
+                    genre_tags += genre_tags_list
+            if all_tags:
+                all_tags += genre_tags
+            else:
+                all_tags = genre_tags
+
+        calibre_tags = self._convert_genres_to_calibre_tags(all_tags)
+
+        if len(calibre_tags) > 0:
+            return calibre_tags
 
     def _convert_genres_to_calibre_tags(self, genre_tags):
         # for each tag, add if we have a dictionary lookup
         calibre_tag_lookup = cfg.plugin_prefs[cfg.STORE_NAME][cfg.KEY_GENRE_MAPPINGS]
-        calibre_tag_map = dict((k.lower(),v) for (k,v) in calibre_tag_lookup.iteritems())
+        calibre_tag_map = dict((k.lower(),v) for (k,v) in calibre_tag_lookup.items())
         tags_to_add = list()
         for genre_tag in genre_tags:
             tags = calibre_tag_map.get(genre_tag.lower(), None)
@@ -157,4 +208,7 @@ class Worker(Thread): # Get details
                 for tag in tags:
                     if tag not in tags_to_add:
                         tags_to_add.append(tag)
+            else:
+                if genre_tag not in tags_to_add:
+                    tags_to_add.append(genre_tag)
         return list(tags_to_add)

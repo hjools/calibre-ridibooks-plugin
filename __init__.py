@@ -8,10 +8,12 @@ __copyright__ = 'Jin, Heonkyu <heonkyu.jin@gmail.com>'
 __docformat__ = 'restructuredtext en'
 
 import time
-from urllib import quote
-from Queue import Queue, Empty
+from urllib.parse import quote
+from queue import Queue, Empty
 
 from lxml.html import fromstring, tostring
+import calibre_plugins.ridibooks.libs.requests as requests
+import json
 
 from calibre import as_unicode
 from calibre.ebooks.metadata import check_isbn
@@ -28,7 +30,7 @@ class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Jin, Heonkyu <heonkyu.jin@gmail.com>'
-    version = (0, 0, 2)
+    version = (1, 0, 0)
     minimum_calibre_version = (0, 8, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -38,8 +40,11 @@ class RidiBooks(Source):
     has_html_comments = True
     supports_gzip_transfer_encoding = True
 
+
     BASE_URL = 'http://ridibooks.com'
+    SEARCH_URL = 'https://search-api.ridibooks.com/search?site=ridi-store&where=book&where=author&select=n&category_id=0&start=0&what=base&keyword='
     MAX_EDITIONS = 5
+
 
     def config_widget(self):
         '''
@@ -52,7 +57,7 @@ class RidiBooks(Source):
         ridibooks_id = identifiers.get('ridibooks', None)
         if ridibooks_id:
             return ('ridibooks', ridibooks_id,
-                    '%s/v2/Detail?id=%s' % (RidiBooks.BASE_URL, ridibooks_id))
+                    '%s/books/%s' % (RidiBooks.BASE_URL, ridibooks_id))
 
     def create_query(self, log, title=None, authors=None, identifiers={}):
         isbn = check_isbn(identifiers.get('isbn', None))
@@ -62,17 +67,19 @@ class RidiBooks(Source):
                                 strip_joiners=False, strip_subtitle=True))
             author_tokens = self.get_author_tokens(authors, only_first_author=True)
 
-            tokens = [quote(t.encode('utf-8') if isinstance(t, unicode) else t) 
+            tokens = [quote(t.encode('utf-8') if isinstance(t, str) else t)
                 for t in title_tokens]
-            tokens += [quote(t.encode('utf-8') if isinstance(t, unicode) else t) 
+            tokens += [quote(t.encode('utf-8') if isinstance(t, str) else t)
                 for t in author_tokens]
-            url = '/search/?q=' + '+'.join(tokens)
+            # url = '/search/?q=' + '+'.join(tokens) + '&adult_exclude=n'
+            url = RidiBooks.SEARCH_URL + '+'.join(tokens) + '&adult_exclude=n'
 
         if not url:
             return None
 
         log.info('Search from %s' %(url))
-        return RidiBooks.BASE_URL + url
+        # return RidiBooks.BASE_URL + url
+        return url
 
     def get_cached_cover_url(self, identifiers):
         url = None
@@ -100,7 +107,7 @@ class RidiBooks(Source):
         isbn = check_isbn(identifiers.get('isbn', None))
         br = self.browser
         if ridibooks_id:
-            matches.append('%s/v2/Detail?id=%s' % (RidiBooks.BASE_URL, ridibooks_id))
+            matches.append('%s/books/%s' % (RidiBooks.BASE_URL, ridibooks_id))
         else:
             query = self.create_query(log, title=title, authors=authors,
                     identifiers=identifiers)
@@ -109,27 +116,33 @@ class RidiBooks(Source):
                 return
             try:
                 log.info('Querying: %s' % query)
-                response = br.open_novisit(query, timeout=timeout)
+                # response = br.open_novisit(query, timeout=timeout)
+
+                response = requests.get(query).text
+                raw = json.loads(response)
+                # log.info(raw)
+                # raw = fromstring(response.text)
             except Exception as e:
                 err = 'Failed to make identify query: %r' % query
                 log.exception(err)
                 return as_unicode(e)
 
             try:
-                raw = response.read().strip()
+                # raw = response.read().strip()
                 #open('E:\\t.html', 'wb').write(raw)
-                raw = raw.decode('utf-8', errors='replace')
+                # raw = raw.decode('utf-8', errors='replace')
                 if not raw:
                     log.error('Failed to get raw result for query: %r' % query)
                     return
-                root = fromstring(clean_ascii_chars(raw))
+                # root = fromstring(clean_ascii_chars(raw))
             except:
-                msg = 'Failed to parse goodreads page for query: %r' % query
+                msg = 'Failed to parse ridibooks page for query: %r' % query
                 log.exception(msg)
                 return msg
             # Now grab the first value from the search results, provided the
             # title and authors appear to be for the same book
-            self._parse_search_results(log, isbn, title, authors, root, matches, timeout)
+            # self._parse_search_results(log, isbn, title, authors, root, matches, timeout)
+            self._parse_search_results(log, isbn, title, authors, raw, matches, timeout)
 
         if abort.is_set():
             return
@@ -144,6 +157,8 @@ class RidiBooks(Source):
             return
 
         from calibre_plugins.ridibooks.worker import Worker
+        # workers = [Worker(url, result_queue, br, log, i, self) for i, url in
+                # enumerate(matches)]
         workers = [Worker(url, result_queue, br, log, i, self) for i, url in
                 enumerate(matches)]
 
@@ -166,18 +181,22 @@ class RidiBooks(Source):
         return None
 
     def _parse_search_results(self, log, isbn, orig_title, orig_authors, root, matches, timeout):
-        search_result = root.xpath('//div[@class="book_metadata_wrapper"]')
+        log.info('Parsing results')
+        # search_result = root.xpath('//ul[@class="css-so1hjs-SearchBookList e1d8ahie4"]')
+        search_result = root['book']['books']
         if not search_result:
             return
-        log.info(search_result[0])
         title_tokens = list(self.get_title_tokens(orig_title))
         author_tokens = list(self.get_author_tokens(orig_authors, True))
 
         import difflib
         similarities = []
         for i in range(len(search_result)):
-            title = search_result[i].xpath('.//span[@class="title_text"]')[0].text_content().strip()
-            author = search_result[i].xpath('.//p[@class="book_metadata author "]/a')[0].text_content().strip()
+            book = search_result[i]
+            title = book['title']
+            author = book['author']
+            # title = search_result[i].xpath('.//h3[@class="css-590vrh-SearchBookTitle ed08jkz2"]')[0].text_content().strip()
+            # author = search_result[i].xpath('.//span[@type="author"]/a')[0].text_content().strip()
             log.info('Compare %s (%s) with %s (%s)' % (title, author, 
                         ' '.join(title_tokens), 
                         ' '.join(author_tokens)))
@@ -187,13 +206,15 @@ class RidiBooks(Source):
                     author.replace(' ', ''), ''.join(author_tokens)).ratio()
             similarities.append(title_similarity * author_similarity)
 
-        matched_node = search_result[similarities.index(max(similarities))]
+        matched_book = search_result[similarities.index(max(similarities))]
 
-        if matched_node is None:
-            log.error('Rejecting as not close enough match: %s %s' % (title, authors))
+        if matched_book is None:
+            log.error('Rejecting as not close enough match: %s %s' % (title, author))
             return
 
-        first_result_url = matched_node.xpath('.//a[@class="title_link "]/@href')[0]
+        # matches.append(matched_book)
+
+        first_result_url = '/books/' + matched_book['b_id']
         if first_result_url:
             import calibre_plugins.ridibooks.config as cfg
             c = cfg.plugin_prefs[cfg.STORE_NAME]
@@ -240,9 +261,18 @@ if __name__ == '__main__': # tests
     # To run these test use:
     # calibre-debug -e __init__.py
     from calibre.ebooks.metadata.sources.test import (test_identify_plugin,
-            title_test, authors_test, series_test)
+            title_test, authors_test, series_test, tags_test)
 
     test_identify_plugin(RidiBooks.name, [
+        (#테라리움 어드벤처
+            {
+                'title':u'테라리움 어드벤처 1화'
+            },
+            [
+                title_test(u'테라리움 어드벤처 1화'),
+                authors_test([u'수하수하'])
+            ]
+        ),
         (# 정의란 무엇인가
             {
                 'identifiers': {'ridibooks': '593000535'}
@@ -255,7 +285,7 @@ if __name__ == '__main__': # tests
 
         (# 세상에서 제일 쉬운 회계학
             {
-                'title':u'회계학', 
+                'title':u'회계학',
                 'authors':[u'구보 유키야']
             },
             [
@@ -266,18 +296,18 @@ if __name__ == '__main__': # tests
 
         (# 테메레르 6권
             {
-                'title':u"테메레르 큰바다뱀", 
+                'title':u"테메레르 큰바다뱀",
             },
             [
                 title_test(u"테메레르 6권 - 큰바다뱀들의 땅", exact=True),
                 authors_test([u'나오미 노빅', u'공보경(역자)']),
-                series_test('테메레르', 6.0)
+                series_test(u'테메레르', 6.0)
             ]
         ),
 
         (# 나홀로 여행 컨설팅북
             {
-                'title':u"나홀로 여행 컨설팅북", 
+                'title':u"나홀로 여행 컨설팅북",
             },
             [
                 title_test(u"나홀로 여행 컨설팅북", exact=True),

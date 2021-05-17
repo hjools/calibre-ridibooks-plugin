@@ -34,6 +34,7 @@ from calibre.utils.config import config_dir, tweaks
 from calibre.utils.date import now, format_date, qt_to_dt, UNDEFINED_DATE
 from calibre.utils.icu import sort_key
 
+
 # Global definition of our plugin name. Used for common functions that require this.
 plugin_name = None
 # Global definition of our plugin resources. Used to share between the xxxAction and xxxBase
