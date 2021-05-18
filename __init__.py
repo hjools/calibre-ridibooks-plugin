@@ -4,7 +4,7 @@ from __future__ import (unicode_literals, division, absolute_import,
                         print_function)
 
 __license__ = 'GPL v3'
-__copyright__ = 'Jin, Heonkyu <heonkyu.jin@gmail.com>'
+__copyright__ = 'Helen Lee <ju.helen.lee@gmail.com>'
 __docformat__ = 'restructuredtext en'
 
 import time
@@ -29,7 +29,7 @@ except NameError:
 class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
-    author = 'Jin, Heonkyu <heonkyu.jin@gmail.com>'
+    author = 'Helen Lee <ju.helen.lee@gmail.com>'
     version = (1, 0, 0)
     minimum_calibre_version = (0, 8, 0)
 
@@ -41,7 +41,7 @@ class RidiBooks(Source):
     supports_gzip_transfer_encoding = True
 
 
-    BASE_URL = 'http://ridibooks.com'
+    BASE_URL = 'https://ridibooks.com'
     SEARCH_URL = 'https://search-api.ridibooks.com/search?site=ridi-store&where=book&where=author&select=n&category_id=0&start=0&what=base&keyword='
     MAX_EDITIONS = 5
 
@@ -157,8 +157,7 @@ class RidiBooks(Source):
             return
 
         from calibre_plugins.ridibooks.worker import Worker
-        # workers = [Worker(url, result_queue, br, log, i, self) for i, url in
-                # enumerate(matches)]
+
         workers = [Worker(url, result_queue, br, log, i, self) for i, url in
                 enumerate(matches)]
 
@@ -181,8 +180,6 @@ class RidiBooks(Source):
         return None
 
     def _parse_search_results(self, log, isbn, orig_title, orig_authors, root, matches, timeout):
-        log.info('Parsing results')
-        # search_result = root.xpath('//ul[@class="css-so1hjs-SearchBookList e1d8ahie4"]')
         search_result = root['book']['books']
         if not search_result:
             return
@@ -195,8 +192,7 @@ class RidiBooks(Source):
             book = search_result[i]
             title = book['title']
             author = book['author']
-            # title = search_result[i].xpath('.//h3[@class="css-590vrh-SearchBookTitle ed08jkz2"]')[0].text_content().strip()
-            # author = search_result[i].xpath('.//span[@type="author"]/a')[0].text_content().strip()
+
             log.info('Compare %s (%s) with %s (%s)' % (title, author, 
                         ' '.join(title_tokens), 
                         ' '.join(author_tokens)))
@@ -271,6 +267,15 @@ if __name__ == '__main__': # tests
             [
                 title_test(u'테라리움 어드벤처 1화'),
                 authors_test([u'수하수하'])
+            ]
+        ),
+        (
+            {
+                'title':u'오직 네 죽음만이 나를 1권'
+            },
+            [
+                title_test(u'오직 네 죽음만이 나를 1권'),
+                authors_test([u'플로나'])
             ]
         ),
         (# 정의란 무엇인가

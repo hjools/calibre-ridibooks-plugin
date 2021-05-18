@@ -90,7 +90,10 @@ DEFAULT_GENRE_MAPPINGS = {
                 'Writing > Essays': ['Writing'],
                 'Young Adult': ['Young Adult'],
                 u'로맨스 웹소설': [u'로맨스'],
-                u'판타지물': [u'판타지']
+                u'로맨스 e북': [u'로맨스'],
+                u'판타지물': [u'판타지'],
+                u'BL 소설 e북': [u'BL'],
+                u'BL 웹소설': [u'BL']
                 }
 
 DEFAULT_STORE_VALUES = {

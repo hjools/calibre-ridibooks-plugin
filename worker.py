@@ -14,7 +14,6 @@ from threading import Thread
 import lxml.html
 import json
 
-from calibre import as_unicode
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.library.comments import sanitize_comments_html
 from calibre.utils.cleantext import clean_ascii_chars, unescape
@@ -22,6 +21,7 @@ from calibre.utils.localization import canonicalize_lang
 from calibre.utils.date import utc_tz
 
 import calibre_plugins.ridibooks.config as cfg
+import calibre_plugins.ridibooks.libs.requests as requests
 
 class Worker(Thread): # Get details
 
@@ -60,7 +60,6 @@ class Worker(Thread): # Get details
             self.log.exception('get_details failed for url: %r'%self.url)
 
     def load_details(self, url, timeout):
-        self.log.info('Loading details')
 
         def _format_item(str):
             return re.sub('^"(.*)"$', '\\1', unescape(str))
@@ -77,28 +76,48 @@ class Worker(Thread): # Get details
             day = int(date_text[6:])
             return datetime.datetime(year, month, day, tzinfo=utc_tz)
 
-        try:
-            response = self.browser.open(url, timeout=timeout)
-            root = lxml.html.fromstring(response.read())
-            # self.log.info(lxml.html.tostring(root))
+        def _normalize_score(score):
+            return float(score)/5.0
 
-            # <meta> tag에서 불러오는 항목
-            # 책ID, 제목, ISBN, 이미지URL, 평점
-            meta = root.xpath('//head/meta[starts-with(@property, "og") or starts-with(@property, "books")]')
+        def _get_book_page(self):
 
-            # schema.org JSON에서 불러오는 항목
-            # 제목, 저자, 책소개, 출판사
-            ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
-            ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
-            ld = ld.replace('&lt;', '<')
-            ld = ld.replace('&gt;', '>')
-            ld = ld.replace('\&quot;', '\\"')
-            ld = ld.replace('&quot;', '\\"')
-            book_info = json.loads(ld)
-            # self.log.info(book_info)
+            header = {
+                'Connection': 'keep-alive',
+                'Accept-Language': 'en-us',
+                'Host': 'ridibooks.com',
+                'Referer': 'https://ridibooks.com/account/login?return_url=https%3A%2F%2Fridibooks.com%2F'
+            }
+            payload = {
+                'user_id': (None, ''),
+                'password': (None, ''),
+                'cmd': (None, 'login'),
+                'return_url': (None, 'https://ridibooks.com/'),
+            }
+            try:
+                with requests.Session() as s:
+                    loggedin = s.post('https://ridibooks.com/account/action/login', headers=header, files=payload)
+                    response = s.get(url)
+                    root = lxml.html.fromstring(response.text)
+            except Exception as e:
+                self.log.exception(e)
+            return root
 
-        except Exception as e:
-            self.log.exception(e)
+        root = _get_book_page(self)
+
+        # <meta> tag에서 불러오는 항목
+        # 책ID, 제목, ISBN, 이미지URL, 평점
+        meta = root.xpath('//head/meta[starts-with(@property, "og") or starts-with(@property, "books")]')
+
+        # schema.org JSON에서 불러오는 항목
+        # 제목, 저자, 책소개, 출판사
+        ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
+
+        ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
+        ld = ld.replace('&lt;', '<')
+        ld = ld.replace('&gt;', '>')
+        ld = ld.replace('\&quot;', '\\"')
+        ld = ld.replace('&quot;', '\\"')
+        book_info = json.loads(ld)
 
         x = url.split("/books/")
         y = x[1].split("?_")
@@ -108,12 +127,10 @@ class Worker(Thread): # Get details
         cover_url = _find_meta(meta, 'og:image')
 
         title = _find_meta(meta, 'og:title')
-        # authors = _format_list(self.book['author'])
         authors = _format_list(book_info['author']['name'])
 
         if 'translator' in book_info:
             authors.extend([_ + u'(역자)' for _ in _format_list(book_info['translator']['name'])])
-            # authors.extend([_ + u'(역자)' for _ in _format_list(self.book['translator'])])
 
         mi = Metadata(title, authors)
         mi.set_identifier('ridibooks', ridibooks_id)
@@ -121,23 +138,11 @@ class Worker(Thread): # Get details
         mi.cover_url = cover_url
         mi.has_cover = bool(cover_url)
 
-        # mi.publisher = self.book['publisher']
         mi.publisher = _format_item(book_info['publisher']['name'])
         mi.pubdate = _format_date(book_info['datePublished'])
 
         mi.comments = _format_item(book_info['description'])
         mi.rating = float(_find_meta(meta, 'books:rating:normalized_value'))
-
-        if title.endswith('권'):
-            series = re.search(u'(.*)\s*(\d+)권', title)
-        else:
-            series = re.search(u'(.*)\s*(\d+)화', title)
-        if series:
-            mi.series = series.group(1)
-            mi.series_index = float(series.group(2))
-
-        mi.language = 'Korean'
-        mi.source_relevance = self.relevance
 
         if ridibooks_id:
             if isbn:
@@ -147,6 +152,18 @@ class Worker(Thread): # Get details
 
         mi.tags = self.parse_tags(root)
 
+        if title.endswith('권'):
+            series = re.search(u'(.*)\s*(\d+)권', title)
+        else:
+            series = re.search(u'(.*)\s*(\d+)화', title)
+
+        if series:
+            mi.series = series.group(1)
+            mi.series_index = float(series.group(2))
+
+        mi.language = 'Korean'
+        mi.source_relevance = self.relevance
+
         self.plugin.clean_downloaded_metadata(mi)
         self.result_queue.put(mi)
 
@@ -155,6 +172,8 @@ class Worker(Thread): # Get details
         # Goodreads does not have "tags", but it does have Genres (wrapper around popular shelves)
         # We will use those as tags (with a bit of massaging)
         self.log.info("Parsing tags")
+        all_tags = list()
+
         ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
         ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
         ld = ld.replace('&lt;', '<')
@@ -162,18 +181,14 @@ class Worker(Thread): # Get details
         ld = ld.replace('\&quot;', '\\"')
         ld = ld.replace('&quot;', '\\"')
         book_info = json.loads(ld)
-        all_tags = list()
         if 'keywords' in book_info:
             keywords = book_info['keywords']
             keywords = keywords[1:len(keywords)-1]
             keywords_list = keywords.split("\", \"")
-            # self.log.info(keywords_list)
             all_tags = keywords_list
 
         genres_node = root.xpath('//p[@class="info_category_wrap"]')
-        #self.log.info("Parsing tags")
         if genres_node:
-            #self.log.info("Found genres_node")
             genre_tags = list()
             added_main_genre = False
             for genre_node in genres_node:
