@@ -23,18 +23,52 @@ from calibre.utils.date import utc_tz
 import calibre_plugins.ridibooks.config as cfg
 from calibre_plugins.ridibooks import open_url
 
+
+def _balanced_json(text, start):
+    '''Return the substring for the JSON object whose opening brace is at
+    ``start``, tracking string/escape state so braces inside string values
+    don't throw off the depth count.'''
+    depth = 0
+    in_str = esc = False
+    for j in range(start, len(text)):
+        ch = text[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:j + 1]
+    return None
+
+
 class Worker(Thread): # Get details
 
     '''
     Get book details from Ridibooks page in a separate thread
     '''
 
-    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20):
+    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20,
+                 query_title=None, search_tags=None):
         Thread.__init__(self)
         self.daemon = True
         self.url, self.result_queue = url, result_queue
         self.log, self.timeout = log, timeout
         self.relevance, self.plugin = relevance, plugin
+        # The title calibre searched for. Ridibooks' search returns the series
+        # (always volume 1), so the volume the user actually has is taken from
+        # this title (e.g. "고귀한 황후-4").
+        self.query_title = query_title
+        # Clean keyword chips + category from the search result (list of str).
+        self.search_tags = search_tags
 
     def run(self):
         try:
@@ -123,14 +157,7 @@ class Worker(Thread): # Get details
 
         mi.tags = self.parse_tags(root, book_info)
 
-        if title.endswith('권'):
-            series = re.search(r'(.*)\s*(\d+)권', title)
-        else:
-            series = re.search(r'(.*)\s*(\d+)화', title)
-
-        if series:
-            mi.series = series.group(1).strip()
-            mi.series_index = float(series.group(2))
+        self._apply_series(mi, root, title)
 
         mi.languages = ['kor']
         mi.source_relevance = self.relevance
@@ -151,49 +178,108 @@ class Worker(Thread): # Get details
             ld = ld.replace(entity, char)
         return json.loads(ld)
 
+    def _js_object(self, root, varname):
+        # Ridibooks embeds page data as `var <name> = {...};` inline scripts.
+        needle = 'var %s = {' % varname
+        for script in root.xpath('//script/text()'):
+            i = script.find(needle)
+            if i < 0:
+                continue
+            frag = _balanced_json(script, script.find('{', i))
+            if frag:
+                try:
+                    return json.loads(frag)
+                except ValueError:
+                    self.log.exception('Failed to parse JS object %r' % varname)
+            return None
+        return None
+
+    def _series_info(self, root):
+        '''(series_title, series_unit, volume) from the embedded bookDetail,
+        or (None, None, None) if this book is not part of a grouped series.'''
+        detail = self._js_object(root, 'bookDetail') or {}
+        if detail.get('is_series') not in ('1', 1, True):
+            return None, None, None
+        series_title = detail.get('series_title')
+        unit = detail.get('series_unit') or None
+        try:
+            volume = int(detail.get('volume'))
+        except (TypeError, ValueError):
+            volume = None
+        return (series_title.strip() if series_title else None), unit, volume
+
+    @staticmethod
+    def _parse_volume(title):
+        '''(volume:int, unit:str|None) from a trailing number in the title, e.g.
+        "고귀한 황후-4" -> (4, None); "이제 와 후회해 봤자 6권" -> (6, "권").'''
+        if not title:
+            return None, None
+        m = re.search(r'[\s\-_~]+(\d+)\s*(권|화|부)?\s*$', title)
+        if not m:
+            return None, None
+        return int(m.group(1)), (m.group(2) or None)
+
+    def _apply_series(self, mi, root, og_title):
+        series_title, series_unit, page_volume = self._series_info(root)
+        query_volume, query_unit = self._parse_volume(self.query_title)
+
+        if series_title:
+            # The search always lands on volume 1, so prefer the volume number
+            # from the title calibre searched for (the user's file name).
+            volume = query_volume if query_volume is not None else page_volume
+            mi.series = series_title
+            if volume is not None:
+                mi.series_index = float(volume)
+                # Normalise the title to "<series> <N><unit>" to match the
+                # user's existing Korean series naming, e.g. "고귀한 황후 4권".
+                unit = series_unit or query_unit or '권'
+                mi.title = '%s %d%s' % (series_title, volume, unit)
+            return
+
+        # Not a grouped series: derive a volume number from the title text.
+        if og_title.endswith('권'):
+            m = re.search(r'(.*)\s*(\d+)권', og_title)
+        else:
+            m = re.search(r'(.*)\s*(\d+)화', og_title)
+        if m:
+            mi.series = m.group(1).strip()
+            mi.series_index = float(m.group(2))
+
     def parse_tags(self, root, book_info):
-        # Ridibooks genres (and keyword chips) are mapped to calibre tags.
+        # Ridibooks keyword chips + genre, mapped to calibre tags.
         self.log.info("Parsing tags")
-        all_tags = list()
 
-        keywords = book_info.get('keywords')
-        if isinstance(keywords, str) and keywords:
-            keywords = keywords[1:len(keywords)-1]
-            keywords_list = keywords.split("\", \"")
-            all_tags = keywords_list
+        # Preferred: the clean keyword chips + category from the search result.
+        if self.search_tags:
+            all_tags = list(self.search_tags)
+        else:
+            # Fallback (e.g. lookup by id, no search): the page's keyword meta.
+            all_tags = self._page_keywords(root, book_info)
 
-        # The current site exposes the category via the JSON-LD 'genre' field
-        # (the old info_category_wrap markup is gone).
+        # Always include the genre classification (e.g. the 'BL'/'로판' category).
         genre = book_info.get('genre')
         if isinstance(genre, str) and genre.strip():
             all_tags.append(genre.strip())
         elif isinstance(genre, list):
             all_tags += [g for g in genre if g]
 
-        genres_node = root.xpath('//p[@class="info_category_wrap"]')
-        if genres_node:
-            genre_tags = list()
-            added_main_genre = False
-            for genre_node in genres_node:
-                if not added_main_genre:
-                    main_genre_node = genre_node.xpath('a[1]')[0].text_content()
-                    genre_tags.append(main_genre_node)
-                    added_main_genre = True
-                sub_genre_nodes = genre_node.xpath('span[@class="icon-arrow_2_right"]/following-sibling::a[1]')
-                genre_tags_list = [sgn.text_content().strip() for sgn in sub_genre_nodes]
-                #self.log.info("Found genres_tags list:", genre_tags_list)
-                if genre_tags_list:
-                    # genre_tags.append(' > '.join(genre_tags_list))
-                    genre_tags += genre_tags_list
-            if all_tags:
-                all_tags += genre_tags
-            else:
-                all_tags = genre_tags
-
         calibre_tags = self._convert_genres_to_calibre_tags(all_tags)
-
         if len(calibre_tags) > 0:
             return calibre_tags
+
+    def _page_keywords(self, root, book_info):
+        # `<meta name="keywords">` carries the chips plus store/format noise and
+        # the author/publisher names; strip the obvious non-tag entries.
+        content = root.xpath('//head/meta[@name="keywords"]/@content')
+        if not content:
+            return []
+        names = [unescape(k).strip() for k in content[0].split(',')]
+        drop = {'ebook', '전자책', '웹책', '웹소설', '웹툰', '만화', '일반만화'}
+        for key in ('author', 'publisher'):
+            obj = book_info.get(key)
+            if isinstance(obj, dict) and obj.get('name'):
+                drop.add(obj['name'].strip())
+        return [k for k in names if k and k not in drop and not k.endswith('e북')]
 
     def _convert_genres_to_calibre_tags(self, genre_tags):
         # for each tag, add if we have a dictionary lookup

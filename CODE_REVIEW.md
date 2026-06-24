@@ -18,8 +18,14 @@
 > `mi.isbn` was extracted but never actually assigned to the `Metadata` (so ISBN
 > always came back empty) — now set; title+author searches could return nothing
 > because calibre's author tokens are ANDed and may be partial, so a title-only
-> retry was added; and tags now come from the JSON-LD `genre` field since the old
-> `info_category_wrap` markup was removed from the site. End-to-end verified:
+> retry was added; and tags now come from the search result's keyword chips
+> (`tags_info`) plus the cleaned category and JSON-LD `genre` — restoring the
+> full keyword list the old plugin showed (the old `info_category_wrap` markup
+> and JSON-LD `keywords` are both gone); and series handling
+> was reworked: the series name comes from the embedded `bookDetail` object,
+> the volume index is taken from the searched title (Ridibooks' search always
+> returns volume 1 of a grouped series, so the page can't tell which volume the
+> user has), and the book title is normalised to `<series> <N>권`. End-to-end verified:
 > identify by id and by title/author, plus cover download, all return correct
 > data on calibre 9.9.
 >

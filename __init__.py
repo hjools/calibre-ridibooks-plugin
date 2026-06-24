@@ -38,11 +38,26 @@ def open_url(url, timeout=30):
     return urlopen(req, timeout=timeout).read()
 
 
+# Suffixes Ridibooks appends to category names (e.g. "BL 소설 e북" -> "BL").
+_CATEGORY_SUFFIXES = (' 소설 e북', ' e북', ' 웹소설', '웹소설', ' 만화', '만화')
+
+
+def _clean_category(name):
+    if not name:
+        return None
+    for suffix in _CATEGORY_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+            break
+    name = name.strip()
+    return name or None
+
+
 class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Helen Lee <ju.helen.lee@gmail.com>'
-    version = (1, 0, 1)
+    version = (1, 0, 2)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -119,7 +134,8 @@ class RidiBooks(Source):
         isbn = check_isbn(identifiers.get('isbn', None))
         br = self.browser
         if ridibooks_id:
-            matches.append('%s/books/%s' % (RidiBooks.BASE_URL, ridibooks_id))
+            # (url, tags_info) - no search result here, so no keyword chips.
+            matches.append(('%s/books/%s' % (RidiBooks.BASE_URL, ridibooks_id), None))
         else:
             query = self.create_query(log, title=title, authors=authors,
                     identifiers=identifiers)
@@ -172,8 +188,9 @@ class RidiBooks(Source):
 
         from calibre_plugins.ridibooks.worker import Worker
 
-        workers = [Worker(url, result_queue, br, log, i, self) for i, url in
-                enumerate(matches)]
+        workers = [Worker(url, result_queue, br, log, i, self, query_title=title,
+                          search_tags=tags)
+                for i, (url, tags) in enumerate(matches)]
 
         for w in workers:
             w.start()
@@ -224,7 +241,16 @@ class RidiBooks(Source):
         if not similarities:
             return
         matched_book = search_result[similarities.index(max(similarities))]
-        matches.append('%s/books/%s' % (RidiBooks.BASE_URL, matched_book['b_id']))
+        # Clean keyword chips, plus the (cleaned) category names, e.g. "BL".
+        search_tags = [t['tag_name'] for t in (matched_book.get('tags_info') or [])
+                       if t.get('tag_name')]
+        for key in ('category_name', 'parent_category_name',
+                    'category_name2', 'parent_category_name2'):
+            cat = _clean_category(matched_book.get(key))
+            if cat:
+                search_tags.append(cat)
+        matches.append(('%s/books/%s' % (RidiBooks.BASE_URL, matched_book['b_id']),
+                        search_tags))
 
     def download_cover(self, log, result_queue, abort,
             title=None, authors=None, identifiers={}, timeout=30):
