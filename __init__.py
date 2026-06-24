@@ -9,10 +9,10 @@ __docformat__ = 'restructuredtext en'
 
 import time
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 from queue import Queue, Empty
 
 from lxml.html import fromstring, tostring
-import calibre_plugins.ridibooks.libs.requests as requests
 import json
 
 from calibre import as_unicode
@@ -26,12 +26,24 @@ try:
 except NameError:
     pass
 
+USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+
+def open_url(url, timeout=30):
+    # Ridibooks' WAF returns HTTP 403 to calibre's mechanize browser regardless
+    # of User-Agent, but accepts a plain stdlib urllib request with a normal
+    # browser User-Agent. Returns the raw response bytes.
+    req = Request(url, headers={'User-Agent': USER_AGENT, 'Accept': '*/*'})
+    return urlopen(req, timeout=timeout).read()
+
+
 class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Helen Lee <ju.helen.lee@gmail.com>'
-    version = (1, 0, 0)
-    minimum_calibre_version = (0, 8, 0)
+    version = (1, 0, 1)
+    minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset(['title', 'authors', 'identifier:ridibooks',
@@ -116,12 +128,8 @@ class RidiBooks(Source):
                 return
             try:
                 log.info('Querying: %s' % query)
-                # response = br.open_novisit(query, timeout=timeout)
-
-                response = requests.get(query).text
+                response = open_url(query, timeout=timeout)
                 raw = json.loads(response)
-                # log.info(raw)
-                # raw = fromstring(response.text)
             except Exception as e:
                 err = 'Failed to make identify query: %r' % query
                 log.exception(err)
@@ -153,6 +161,12 @@ class RidiBooks(Source):
                         ' title and authors')
                 return self.identify(log, result_queue, abort, title=title,
                         authors=authors, timeout=timeout)
+            if authors:
+                # Ridibooks ANDs keyword terms, and calibre's author tokens can
+                # be a partial name that matches nothing. Retry with title only.
+                log.info('No matches with title and author, retrying with title only')
+                return self.identify(log, result_queue, abort, title=title,
+                        authors=None, timeout=timeout)
             log.error('No matches found with query: %r' % query)
             return
 
@@ -196,25 +210,21 @@ class RidiBooks(Source):
             log.info('Compare %s (%s) with %s (%s)' % (title, author, 
                         ' '.join(title_tokens), 
                         ' '.join(author_tokens)))
-            title_similarity = difflib.SequenceMatcher(None, 
+            title_similarity = difflib.SequenceMatcher(None,
                     title.replace(' ', ''), ''.join(title_tokens)).ratio()
-            author_similarity = difflib.SequenceMatcher(None, 
-                    author.replace(' ', ''), ''.join(author_tokens)).ratio()
-            similarities.append(title_similarity * author_similarity)
+            # Only factor in the author when one was supplied, otherwise the
+            # (empty) author comparison zeroes out every score.
+            if author_tokens:
+                author_similarity = difflib.SequenceMatcher(None,
+                        author.replace(' ', ''), ''.join(author_tokens)).ratio()
+                similarities.append(title_similarity * author_similarity)
+            else:
+                similarities.append(title_similarity)
 
-        matched_book = search_result[similarities.index(max(similarities))]
-
-        if matched_book is None:
-            log.error('Rejecting as not close enough match: %s %s' % (title, author))
+        if not similarities:
             return
-
-        # matches.append(matched_book)
-
-        first_result_url = '/books/' + matched_book['b_id']
-        if first_result_url:
-            import calibre_plugins.ridibooks.config as cfg
-            c = cfg.plugin_prefs[cfg.STORE_NAME]
-            matches.append('%s%s' % (RidiBooks.BASE_URL, first_result_url))
+        matched_book = search_result[similarities.index(max(similarities))]
+        matches.append('%s/books/%s' % (RidiBooks.BASE_URL, matched_book['b_id']))
 
     def download_cover(self, log, result_queue, abort,
             title=None, authors=None, identifiers={}, timeout=30):
@@ -244,10 +254,9 @@ class RidiBooks(Source):
 
         if abort.is_set():
             return
-        br = self.browser
         log('Downloading cover from:', cached_url)
         try:
-            cdata = br.open_novisit(cached_url, timeout=timeout).read()
+            cdata = open_url(cached_url, timeout=timeout)
             result_queue.put((self, cdata))
         except:
             log.exception('Failed to download cover from:', cached_url)

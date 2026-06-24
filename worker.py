@@ -21,7 +21,7 @@ from calibre.utils.localization import canonicalize_lang
 from calibre.utils.date import utc_tz
 
 import calibre_plugins.ridibooks.config as cfg
-import calibre_plugins.ridibooks.libs.requests as requests
+from calibre_plugins.ridibooks import open_url
 
 class Worker(Thread): # Get details
 
@@ -35,23 +35,6 @@ class Worker(Thread): # Get details
         self.url, self.result_queue = url, result_queue
         self.log, self.timeout = log, timeout
         self.relevance, self.plugin = relevance, plugin
-        self.browser = browser.clone_browser()
-
-        lm = {
-                'eng': ('English', 'Englisch'),
-                'fra': ('French', 'Français'),
-                'ita': ('Italian', 'Italiano'),
-                'dut': ('Dutch',),
-                'deu': ('German', 'Deutsch'),
-                'spa': ('Spanish', 'Espa\xf1ol', 'Espaniol'),
-                'jpn': ('Japanese', u'日本語'),
-                'kor': ('Korean', u'한국어'),
-                'por': ('Portuguese', 'Português'),
-                }
-        self.lang_map = {}
-        for code, names in lm.items():
-            for name in names:
-                self.lang_map[name] = code
 
     def run(self):
         try:
@@ -68,41 +51,26 @@ class Worker(Thread): # Get details
             return [_.strip() for _ in _format_item(str).split(',')]
 
         def _find_meta(node, property):
-            return [_.get('content') for _ in node if _.get('property') == property][0]
+            values = [_.get('content') for _ in node if _.get('property') == property]
+            return values[0] if values else None
 
         def _format_date(date_text):
-            year = int(date_text[0:4])
-            month = int(date_text[4:6]) 
-            day = int(date_text[6:])
+            # Ridibooks now returns ISO 'YYYY-MM-DD'; older data was 'YYYYMMDD'.
+            date_text = date_text.strip()
+            if '-' in date_text:
+                year, month, day = (int(p) for p in date_text.split('-')[:3])
+            else:
+                year, month, day = (int(date_text[0:4]), int(date_text[4:6]),
+                                    int(date_text[6:8]))
             return datetime.datetime(year, month, day, tzinfo=utc_tz)
 
-        def _normalize_score(score):
-            return float(score)/5.0
+        def _get_book_page():
+            # Public book page; no login needed. urllib (not calibre's mechanize
+            # browser, which Ridibooks blocks with HTTP 403).
+            raw = open_url(url, timeout=timeout)
+            return lxml.html.fromstring(raw)
 
-        def _get_book_page(self):
-
-            header = {
-                'Connection': 'keep-alive',
-                'Accept-Language': 'en-us',
-                'Host': 'ridibooks.com',
-                'Referer': 'https://ridibooks.com/account/login?return_url=https%3A%2F%2Fridibooks.com%2F'
-            }
-            payload = {
-                'user_id': (None, ''),
-                'password': (None, ''),
-                'cmd': (None, 'login'),
-                'return_url': (None, 'https://ridibooks.com/'),
-            }
-            try:
-                with requests.Session() as s:
-                    loggedin = s.post('https://ridibooks.com/account/action/login', headers=header, files=payload)
-                    response = s.get(url)
-                    root = lxml.html.fromstring(response.text)
-            except Exception as e:
-                self.log.exception(e)
-            return root
-
-        root = _get_book_page(self)
+        root = _get_book_page()
 
         # <meta> tag에서 불러오는 항목
         # 책ID, 제목, ISBN, 이미지URL, 평점
@@ -110,14 +78,7 @@ class Worker(Thread): # Get details
 
         # schema.org JSON에서 불러오는 항목
         # 제목, 저자, 책소개, 출판사
-        ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
-
-        ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
-        ld = ld.replace('&lt;', '<')
-        ld = ld.replace('&gt;', '>')
-        ld = ld.replace('\&quot;', '\\"')
-        ld = ld.replace('&quot;', '\\"')
-        book_info = json.loads(ld)
+        book_info = self._book_ld_json(root)
 
         x = url.split("/books/")
         y = x[1].split("?_")
@@ -139,53 +100,75 @@ class Worker(Thread): # Get details
         mi.has_cover = bool(cover_url)
 
         mi.publisher = _format_item(book_info['publisher']['name'])
-        mi.pubdate = _format_date(book_info['datePublished'])
+        if book_info.get('datePublished'):
+            try:
+                mi.pubdate = _format_date(book_info['datePublished'])
+            except Exception:
+                self.log.exception('Failed to parse datePublished: %r'
+                                   % book_info.get('datePublished'))
 
         mi.comments = _format_item(book_info['description'])
-        mi.rating = float(_find_meta(meta, 'books:rating:normalized_value'))
+        # 'books:rating:normalized_value' is on a 0..1 scale; calibre wants 0..5.
+        rating = _find_meta(meta, 'books:rating:normalized_value')
+        if rating is not None:
+            mi.rating = max(0.0, min(5.0, float(rating) * 5.0))
 
+        if isbn:
+            mi.isbn = isbn
         if ridibooks_id:
             if isbn:
                 self.plugin.cache_isbn_to_identifier(isbn, ridibooks_id)
             if cover_url:
                 self.plugin.cache_identifier_to_cover_url(ridibooks_id, cover_url)
 
-        mi.tags = self.parse_tags(root)
+        mi.tags = self.parse_tags(root, book_info)
 
         if title.endswith('권'):
-            series = re.search(u'(.*)\s*(\d+)권', title)
+            series = re.search(r'(.*)\s*(\d+)권', title)
         else:
-            series = re.search(u'(.*)\s*(\d+)화', title)
+            series = re.search(r'(.*)\s*(\d+)화', title)
 
         if series:
-            mi.series = series.group(1)
+            mi.series = series.group(1).strip()
             mi.series_index = float(series.group(2))
 
-        mi.language = 'Korean'
+        mi.languages = ['kor']
         mi.source_relevance = self.relevance
 
         self.plugin.clean_downloaded_metadata(mi)
         self.result_queue.put(mi)
 
 
-    def parse_tags(self, root):
-        # Goodreads does not have "tags", but it does have Genres (wrapper around popular shelves)
-        # We will use those as tags (with a bit of massaging)
+    def _book_ld_json(self, root):
+        # Extract and repair the schema.org Book JSON-LD embedded in the page.
+        ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
+        candidates = [_ for _ in ld_json if '"@type": "Book"' in _]
+        if not candidates:
+            return {}
+        ld = candidates[0]
+        for entity, char in (('&lt;', '<'), ('&gt;', '>'),
+                             (r'\&quot;', '\\"'), ('&quot;', '\\"')):
+            ld = ld.replace(entity, char)
+        return json.loads(ld)
+
+    def parse_tags(self, root, book_info):
+        # Ridibooks genres (and keyword chips) are mapped to calibre tags.
         self.log.info("Parsing tags")
         all_tags = list()
 
-        ld_json = root.xpath('//head/script[@type="application/ld+json"]/text()')
-        ld = [_ for _ in ld_json if '"@type": "Book"' in _][0]
-        ld = ld.replace('&lt;', '<')
-        ld = ld.replace('&gt;', '>')
-        ld = ld.replace('\&quot;', '\\"')
-        ld = ld.replace('&quot;', '\\"')
-        book_info = json.loads(ld)
-        if 'keywords' in book_info:
-            keywords = book_info['keywords']
+        keywords = book_info.get('keywords')
+        if isinstance(keywords, str) and keywords:
             keywords = keywords[1:len(keywords)-1]
             keywords_list = keywords.split("\", \"")
             all_tags = keywords_list
+
+        # The current site exposes the category via the JSON-LD 'genre' field
+        # (the old info_category_wrap markup is gone).
+        genre = book_info.get('genre')
+        if isinstance(genre, str) and genre.strip():
+            all_tags.append(genre.strip())
+        elif isinstance(genre, list):
+            all_tags += [g for g in genre if g]
 
         genres_node = root.xpath('//p[@class="info_category_wrap"]')
         if genres_node:

@@ -10,15 +10,15 @@ __docformat__ = 'restructuredtext en'
 import copy
 from functools import partial
 try:
-    from PyQt5 import Qt as QtGui
+    # calibre 6+ (Qt6). qt.core aggregates QtCore/QtGui/QtWidgets.
+    from qt.core import (QTableWidgetItem, QVBoxLayout, Qt, QGroupBox, QTableWidget,
+                         QCheckBox, QAbstractItemView, QHBoxLayout, QIcon,
+                         QInputDialog, QToolButton, QSpacerItem, QSizePolicy)
+except ImportError:
+    # calibre 5 (Qt5).
     from PyQt5.Qt import (QTableWidgetItem, QVBoxLayout, Qt, QGroupBox, QTableWidget,
                           QCheckBox, QAbstractItemView, QHBoxLayout, QIcon,
-                          QInputDialog)
-except ImportError:
-    from PyQt4 import QtGui
-    from PyQt4.Qt import (QTableWidgetItem, QVBoxLayout, Qt, QGroupBox, QTableWidget,
-                          QCheckBox, QAbstractItemView, QHBoxLayout, QIcon,
-                          QInputDialog)
+                          QInputDialog, QToolButton, QSpacerItem, QSizePolicy)
 from calibre.gui2 import get_current_db, question_dialog, error_dialog
 from calibre.gui2.complete2 import EditWithComplete
 from calibre.gui2.metadata.config import ConfigWidget as DefaultConfigWidget
@@ -27,8 +27,6 @@ from calibre.utils.config import JSONConfig
 from calibre_plugins.ridibooks.common_utils import ReadOnlyTableWidgetItem
 
 STORE_NAME = 'Options'
-KEY_GET_ALL_AUTHORS = 'getAllAuthors'
-KEY_GET_EDITIONS = 'getEditions'
 KEY_GENRE_MAPPINGS = 'genreMappings'
 
 DEFAULT_GENRE_MAPPINGS = {
@@ -97,8 +95,6 @@ DEFAULT_GENRE_MAPPINGS = {
                 }
 
 DEFAULT_STORE_VALUES = {
-    KEY_GET_EDITIONS: False,
-    KEY_GET_ALL_AUTHORS: True,
     KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS)
 }
 
@@ -160,8 +156,8 @@ class GenreTagMappingsTableWidget(QTableWidget):
     def get_data(self):
         tag_mappings = {}
         for row in range(self.rowCount()):
-            genre = unicode(self.item(row, 0).text()).strip()
-            tags_text = unicode(self.cellWidget(row, 1).text()).strip()
+            genre = str(self.item(row, 0).text()).strip()
+            tags_text = str(self.cellWidget(row, 1).text()).strip()
             tag_values = tags_text.split(',')
             tags_list = []
             for tag in tag_values:
@@ -172,13 +168,13 @@ class GenreTagMappingsTableWidget(QTableWidget):
 
     def select_genre(self, genre_name):
         for row in range(self.rowCount()):
-            if unicode(self.item(row, 0).text()) == genre_name:
+            if str(self.item(row, 0).text()) == genre_name:
                 self.setCurrentCell(row, 1)
                 return
 
     def get_selected_genre(self):
         if self.currentRow() >= 0:
-            return unicode(self.item(self.currentRow(), 0).text())
+            return str(self.item(self.currentRow(), 0).text())
 
 
 class ConfigWidget(DefaultConfigWidget):
@@ -201,69 +197,39 @@ class ConfigWidget(DefaultConfigWidget):
         tags_layout.addWidget(self.edit_table)
         button_layout = QVBoxLayout()
         tags_layout.addLayout(button_layout)
-        add_mapping_button = QtGui.QToolButton(self)
+        add_mapping_button = QToolButton(self)
         add_mapping_button.setToolTip(_('Add genre mapping'))
         add_mapping_button.setIcon(QIcon(I('plus.png')))
         add_mapping_button.clicked.connect(self.add_mapping)
         button_layout.addWidget(add_mapping_button)
-        spacerItem1 = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        spacerItem1 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
         button_layout.addItem(spacerItem1)
-        remove_mapping_button = QtGui.QToolButton(self)
+        remove_mapping_button = QToolButton(self)
         remove_mapping_button.setToolTip(_('Delete genre mapping'))
         remove_mapping_button.setIcon(QIcon(I('minus.png')))
         remove_mapping_button.clicked.connect(self.delete_mapping)
         button_layout.addWidget(remove_mapping_button)
-        spacerItem3 = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        spacerItem3 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
         button_layout.addItem(spacerItem3)
-        rename_genre_button = QtGui.QToolButton(self)
+        rename_genre_button = QToolButton(self)
         rename_genre_button.setToolTip(_('Rename Goodreads genre'))
         rename_genre_button.setIcon(QIcon(I('edit-undo.png')))
         rename_genre_button.clicked.connect(self.rename_genre)
         button_layout.addWidget(rename_genre_button)
-        spacerItem2 = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        spacerItem2 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
         button_layout.addItem(spacerItem2)
-        reset_defaults_button = QtGui.QToolButton(self)
+        reset_defaults_button = QToolButton(self)
         reset_defaults_button.setToolTip(_('Reset to plugin default mappings'))
         reset_defaults_button.setIcon(QIcon(I('clear_left.png')))
         reset_defaults_button.clicked.connect(self.reset_to_defaults)
         button_layout.addWidget(reset_defaults_button)
         self.l.setRowStretch(self.l.rowCount()-1, 2)
 
-        other_group_box = QGroupBox(_('Other options'), self)
-        self.l.addWidget(other_group_box, self.l.rowCount(), 0, 1, 2)
-        other_group_box_layout = QVBoxLayout()
-        other_group_box.setLayout(other_group_box_layout)
-
-        self.get_editions_checkbox = QCheckBox('Scan multiple editions for title/author searches (slower)', self)
-        self.get_editions_checkbox.setToolTip('When checked will perform an additional search to scan the top ranked\n'
-                                              'Goodreads editions (if available) to exclude audiobook editions.\n'
-                                              'Without this enabled you will get a faster search, using the "best".\n'
-                                              'edition ranked by Goodreads which can in some cases be an audiobook.')
-        self.get_editions_checkbox.setChecked(c[KEY_GET_EDITIONS])
-        other_group_box_layout.addWidget(self.get_editions_checkbox)
-        self.all_authors_checkbox = QCheckBox('Get all contributing authors (e.g. illustrators, series editors etc)', self)
-        self.all_authors_checkbox.setToolTip('Goodreads for some books will list all of the contributing authors and\n'
-                                              'the type of contribution like (Editor), (Illustrator) etc.\n\n'
-                                              'When this option is checked, all contributing authors are retrieved.\n\n'
-                                              'When unchecked (default) only the primary author(s) are returned which\n'
-                                              'are those that either have no contribution type specified, or have the\n'
-                                              'value of (Goodreads Author).\n\n'
-                                              'If there is no primary author then only those with the same contribution\n'
-                                              'type as the first author are returned.\n'
-                                              'e.g. "A, B (Illustrator)" will return author A\n'
-                                              'e.g. "A (Goodreads Author)" will return author A\n'
-                                              'e.g. "A (Editor), B (Editor), C (Illustrator)" will return authors A & B\n'
-                                              'e.g. "A (Editor), B (Series Editor)" will return author A\n')
-        self.all_authors_checkbox.setChecked(c[KEY_GET_ALL_AUTHORS])
-        other_group_box_layout.addWidget(self.all_authors_checkbox)
-
         self.edit_table.populate_table(c[KEY_GENRE_MAPPINGS])
 
     def commit(self):
         DefaultConfigWidget.commit(self)
         new_prefs = {}
-        new_prefs[KEY_GET_EDITIONS] = self.get_editions_checkbox.checkState() == Qt.Checked
-        new_prefs[KEY_GET_ALL_AUTHORS] = self.all_authors_checkbox.checkState() == Qt.Checked
         new_prefs[KEY_GENRE_MAPPINGS] = self.edit_table.get_data()
         plugin_prefs[STORE_NAME] = new_prefs
 
@@ -273,7 +239,7 @@ class ConfigWidget(DefaultConfigWidget):
         if not ok:
             # Operation cancelled
             return
-        new_genre_name = unicode(new_genre_name).strip()
+        new_genre_name = str(new_genre_name).strip()
         if not new_genre_name:
             return
         # Verify it does not clash with any other mappings in the list
@@ -304,7 +270,7 @@ class ConfigWidget(DefaultConfigWidget):
         if not ok:
             # Operation cancelled
             return
-        new_genre_name = unicode(new_genre_name).strip()
+        new_genre_name = str(new_genre_name).strip()
         if not new_genre_name or new_genre_name == selected_genre:
             return
         data = self.edit_table.get_data()

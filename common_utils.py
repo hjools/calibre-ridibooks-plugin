@@ -10,15 +10,15 @@ __docformat__ = 'restructuredtext en'
 import os
 
 try:
-    from PyQt5 import Qt as QtGui
+    # calibre 6+ (Qt6). Note: QRegExp/QRegExpValidator were removed in Qt6 and
+    # are only used by the (unused-here) NumericLineEdit, so they're left out.
+    from qt.core import (Qt, QIcon, QPixmap, QLabel, QDialog, QHBoxLayout,
+                         QTableWidgetItem, QFont, QLineEdit, QComboBox,
+                         QVBoxLayout, QDialogButtonBox, QStyledItemDelegate, QDateTime,
+                         QTextEdit, QListWidget, QAbstractItemView)
+except ImportError:
+    # calibre 5 (Qt5).
     from PyQt5.Qt import (Qt, QIcon, QPixmap, QLabel, QDialog, QHBoxLayout,
-                          QTableWidgetItem, QFont, QLineEdit, QComboBox,
-                          QVBoxLayout, QDialogButtonBox, QStyledItemDelegate, QDateTime,
-                          QRegExpValidator, QRegExp, QTextEdit,
-                          QListWidget, QAbstractItemView)
-except:
-    from PyQt4 import QtGui
-    from PyQt4.Qt import (Qt, QIcon, QPixmap, QLabel, QDialog, QHBoxLayout,
                           QTableWidgetItem, QFont, QLineEdit, QComboBox,
                           QVBoxLayout, QDialogButtonBox, QStyledItemDelegate, QDateTime,
                           QRegExpValidator, QRegExp, QTextEdit,
@@ -284,14 +284,14 @@ class ReadOnlyTableWidgetItem(QTableWidgetItem):
     def __init__(self, text):
         if text is None:
             text = ''
-        QTableWidgetItem.__init__(self, text, QtGui.QTableWidgetItem.UserType)
+        QTableWidgetItem.__init__(self, text, QTableWidgetItem.UserType)
         self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
 
 
 class RatingTableWidgetItem(QTableWidgetItem):
 
     def __init__(self, rating, is_read_only=False):
-        QTableWidgetItem.__init__(self, '', QtGui.QTableWidgetItem.UserType)
+        QTableWidgetItem.__init__(self, '', QTableWidgetItem.UserType)
         self.setData(Qt.DisplayRole, rating)
         if is_read_only:
             self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
@@ -303,10 +303,10 @@ class DateTableWidgetItem(QTableWidgetItem):
         if (date_read == UNDEFINED_DATE) and default_to_today:
             date_read = now()
         if is_read_only:
-            QTableWidgetItem.__init__(self, format_date(date_read, fmt), QtGui.QTableWidgetItem.UserType)
+            QTableWidgetItem.__init__(self, format_date(date_read, fmt), QTableWidgetItem.UserType)
             self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
         else:
-            QTableWidgetItem.__init__(self, '', QtGui.QTableWidgetItem.UserType)
+            QTableWidgetItem.__init__(self, '', QTableWidgetItem.UserType)
             dt = UNDEFINED_QDATETIME if date_read is None else QDateTime(date_read)
             self.setData(Qt.DisplayRole, dt)
 
@@ -401,7 +401,7 @@ class ListComboBox(QComboBox):
         self.setCurrentIndex(selected_idx)
 
     def selected_value(self):
-        return unicode(self.currentText())
+        return str(self.currentText())
 
 
 class KeyValueComboBox(QComboBox):
@@ -414,7 +414,7 @@ class KeyValueComboBox(QComboBox):
     def populate_combo(self, selected_key):
         self.clear()
         selected_idx = idx = -1
-        for key, value in self.values.iteritems():
+        for key, value in self.values.items():
             idx = idx + 1
             self.addItem(value)
             if key == selected_key:
@@ -422,8 +422,8 @@ class KeyValueComboBox(QComboBox):
         self.setCurrentIndex(selected_idx)
 
     def selected_key(self):
-        for key, value in self.values.iteritems():
-            if value == unicode(self.currentText()).strip():
+        for key, value in self.values.items():
+            if value == str(self.currentText()).strip():
                 return key
 
 
@@ -658,7 +658,7 @@ class PrefsViewerDialog(SizePersistedDialog):
     def _populate_settings(self):
         self.keys_list.clear()
         ns_prefix = self._get_ns_prefix()
-        keys = sorted([k[len(ns_prefix):] for k in self.db.prefs.iterkeys()
+        keys = sorted([k[len(ns_prefix):] for k in self.db.prefs.keys()
                        if k.startswith(ns_prefix)])
         for key in keys:
             self.keys_list.addItem(key)
@@ -669,7 +669,7 @@ class PrefsViewerDialog(SizePersistedDialog):
         if new_row < 0:
             self.value_text.clear()
             return
-        key = unicode(self.keys_list.currentItem().text())
+        key = str(self.keys_list.currentItem().text())
         val = self.db.prefs.get_namespaced(self.namespace, key, '')
         self.value_text.setPlainText(self.db.prefs.to_raw(val))
 
@@ -685,8 +685,8 @@ class PrefsViewerDialog(SizePersistedDialog):
         if not confirm(message, self.namespace+'_clear_settings', self):
             return
 
-        val = self.db.prefs.raw_to_object(unicode(self.value_text.toPlainText()))
-        key = unicode(self.keys_list.currentItem().text())
+        val = self.db.prefs.raw_to_object(str(self.value_text.toPlainText()))
+        key = str(self.keys_list.currentItem().text())
         self.db.prefs.set_namespaced(self.namespace, key, val)
 
         restart = prompt_for_restart(self, 'Settings changed',
@@ -706,7 +706,7 @@ class PrefsViewerDialog(SizePersistedDialog):
             return
 
         ns_prefix = self._get_ns_prefix()
-        keys = [k for k in self.db.prefs.iterkeys() if k.startswith(ns_prefix)]
+        keys = [k for k in self.db.prefs.keys() if k.startswith(ns_prefix)]
         for k in keys:
             del self.db.prefs[k]
         self._populate_settings()
