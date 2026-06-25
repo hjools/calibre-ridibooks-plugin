@@ -113,6 +113,7 @@ class Worker(Thread): # Get details
         # schema.org JSON에서 불러오는 항목
         # 제목, 저자, 책소개, 출판사
         book_info = self._book_ld_json(root)
+        detail = self._js_object(root, 'bookDetail') or {}
 
         x = url.split("/books/")
         y = x[1].split("?_")
@@ -141,7 +142,13 @@ class Worker(Thread): # Get details
                 self.log.exception('Failed to parse datePublished: %r'
                                    % book_info.get('datePublished'))
 
-        mi.comments = _format_item(book_info['description'])
+        # The JSON-LD/og description is only the truncated preview snippet; the
+        # full synopsis lives in bookDetail.description.
+        comments = self._clean_description(detail.get('description'))
+        if not comments and book_info.get('description'):
+            comments = _format_item(book_info['description'])
+        if comments:
+            mi.comments = comments
         # 'books:rating:normalized_value' is on a 0..1 scale; calibre wants 0..5.
         rating = _find_meta(meta, 'books:rating:normalized_value')
         if rating is not None:
@@ -157,7 +164,7 @@ class Worker(Thread): # Get details
 
         mi.tags = self.parse_tags(root, book_info)
 
-        self._apply_series(mi, root, title)
+        self._apply_series(mi, detail, title)
 
         mi.languages = ['kor']
         mi.source_relevance = self.relevance
@@ -194,10 +201,9 @@ class Worker(Thread): # Get details
             return None
         return None
 
-    def _series_info(self, root):
+    def _series_info(self, detail):
         '''(series_title, series_unit, volume) from the embedded bookDetail,
         or (None, None, None) if this book is not part of a grouped series.'''
-        detail = self._js_object(root, 'bookDetail') or {}
         if detail.get('is_series') not in ('1', 1, True):
             return None, None, None
         series_title = detail.get('series_title')
@@ -219,8 +225,8 @@ class Worker(Thread): # Get details
             return None, None
         return int(m.group(1)), (m.group(2) or None)
 
-    def _apply_series(self, mi, root, og_title):
-        series_title, series_unit, page_volume = self._series_info(root)
+    def _apply_series(self, mi, detail, og_title):
+        series_title, series_unit, page_volume = self._series_info(detail)
         query_volume, query_unit = self._parse_volume(self.query_title)
 
         if series_title:
@@ -244,6 +250,20 @@ class Worker(Thread): # Get details
         if m:
             mi.series = m.group(1).strip()
             mi.series_index = float(m.group(2))
+
+    def _clean_description(self, desc):
+        if not desc or not desc.strip():
+            return None
+        # Drop the table-of-contents (chapter list); keep synopsis/author note.
+        desc = re.split(r'<(?:b|strong)>\s*&lt;\s*목차\s*&gt;\s*</(?:b|strong)>',
+                        desc)[0]
+        desc = desc.replace('\r\n', '\n').replace('\r', '\n').strip()
+        # Plain-text line breaks -> HTML paragraphs (existing <b>/entities kept).
+        paras = [p.replace('\n', '<br/>')
+                 for p in re.split(r'\n\s*\n', desc) if p.strip()]
+        if not paras:
+            return None
+        return sanitize_comments_html(''.join('<p>%s</p>' % p for p in paras))
 
     def parse_tags(self, root, book_info):
         # Ridibooks keyword chips + genre, mapped to calibre tags.
