@@ -28,6 +28,7 @@ from calibre_plugins.ridibooks.common_utils import ReadOnlyTableWidgetItem
 
 STORE_NAME = 'Options'
 KEY_GENRE_MAPPINGS = 'genreMappings'
+KEY_ADULT_COVERS = 'getAdultCovers'
 
 DEFAULT_GENRE_MAPPINGS = {
                 'Anthologies': ['Anthologies'],
@@ -95,7 +96,8 @@ DEFAULT_GENRE_MAPPINGS = {
                 }
 
 DEFAULT_STORE_VALUES = {
-    KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS)
+    KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS),
+    KEY_ADULT_COVERS: True,
 }
 
 # This is where all preferences for this plugin will be stored
@@ -108,7 +110,7 @@ plugin_prefs.defaults[STORE_NAME] = DEFAULT_STORE_VALUES
 class GenreTagMappingsTableWidget(QTableWidget):
     def __init__(self, parent, all_tags):
         QTableWidget.__init__(self, parent)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tags_values = all_tags
 
     def populate_table(self, tag_mappings):
@@ -185,6 +187,16 @@ class ConfigWidget(DefaultConfigWidget):
         all_tags = get_current_db().all_tags()
 
         self.gb.setMaximumHeight(80)
+
+        self.adult_covers_checkbox = QCheckBox(
+            _('Download full covers for age-restricted (19+) titles'), self)
+        self.adult_covers_checkbox.setToolTip(_(
+            'When enabled, the real cover is downloaded for adult titles.\n'
+            'When disabled, Ridibooks\' generic placeholder cover is used for '
+            'them instead (covers for all other titles are unaffected).'))
+        self.adult_covers_checkbox.setChecked(bool(c.get(KEY_ADULT_COVERS, True)))
+        self.l.addWidget(self.adult_covers_checkbox, self.l.rowCount(), 0, 1, 2)
+
         genre_group_box = QGroupBox(_('Ridibooks genre to calibre tag mappings'), self)
         self.l.addWidget(genre_group_box, self.l.rowCount(), 0, 1, 2)
         genre_group_box_layout = QVBoxLayout()
@@ -202,21 +214,21 @@ class ConfigWidget(DefaultConfigWidget):
         add_mapping_button.setIcon(QIcon(I('plus.png')))
         add_mapping_button.clicked.connect(self.add_mapping)
         button_layout.addWidget(add_mapping_button)
-        spacerItem1 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        spacerItem1 = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         button_layout.addItem(spacerItem1)
         remove_mapping_button = QToolButton(self)
         remove_mapping_button.setToolTip(_('Delete genre mapping'))
         remove_mapping_button.setIcon(QIcon(I('minus.png')))
         remove_mapping_button.clicked.connect(self.delete_mapping)
         button_layout.addWidget(remove_mapping_button)
-        spacerItem3 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        spacerItem3 = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         button_layout.addItem(spacerItem3)
         rename_genre_button = QToolButton(self)
         rename_genre_button.setToolTip(_('Rename Goodreads genre'))
         rename_genre_button.setIcon(QIcon(I('edit-undo.png')))
         rename_genre_button.clicked.connect(self.rename_genre)
         button_layout.addWidget(rename_genre_button)
-        spacerItem2 = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        spacerItem2 = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         button_layout.addItem(spacerItem2)
         reset_defaults_button = QToolButton(self)
         reset_defaults_button.setToolTip(_('Reset to plugin default mappings'))
@@ -231,6 +243,7 @@ class ConfigWidget(DefaultConfigWidget):
         DefaultConfigWidget.commit(self)
         new_prefs = {}
         new_prefs[KEY_GENRE_MAPPINGS] = self.edit_table.get_data()
+        new_prefs[KEY_ADULT_COVERS] = self.adult_covers_checkbox.isChecked()
         plugin_prefs[STORE_NAME] = new_prefs
 
     def add_mapping(self):

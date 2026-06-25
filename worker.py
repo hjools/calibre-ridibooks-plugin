@@ -120,7 +120,15 @@ class Worker(Thread): # Get details
         ridibooks_id = y[0]
 
         isbn = _find_meta(meta, 'books:isbn')
-        cover_url = _find_meta(meta, 'og:image')
+        # For age-restricted (19+) titles Ridibooks' og:image is a generic
+        # "cover_adult.png" placeholder, while the real cover is served openly
+        # at the canonical CDN path. Honour the "adult covers" setting: when on,
+        # always fetch the real cover; when off, use og:image (the SFW
+        # placeholder for adult titles, the real cover for everything else).
+        if cfg.plugin_prefs[cfg.STORE_NAME].get(cfg.KEY_ADULT_COVERS, True):
+            cover_url = 'https://img.ridicdn.net/cover/%s/xxlarge' % ridibooks_id
+        else:
+            cover_url = _find_meta(meta, 'og:image')
 
         title = _find_meta(meta, 'og:title')
         authors = _format_list(book_info['author']['name'])

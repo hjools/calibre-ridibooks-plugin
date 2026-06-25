@@ -284,17 +284,17 @@ class ReadOnlyTableWidgetItem(QTableWidgetItem):
     def __init__(self, text):
         if text is None:
             text = ''
-        QTableWidgetItem.__init__(self, text, QTableWidgetItem.UserType)
-        self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
+        QTableWidgetItem.__init__(self, text, QTableWidgetItem.ItemType.UserType)
+        self.setFlags(Qt.ItemFlag.ItemIsSelectable|Qt.ItemFlag.ItemIsEnabled)
 
 
 class RatingTableWidgetItem(QTableWidgetItem):
 
     def __init__(self, rating, is_read_only=False):
-        QTableWidgetItem.__init__(self, '', QTableWidgetItem.UserType)
+        QTableWidgetItem.__init__(self, '', QTableWidgetItem.ItemType.UserType)
         self.setData(Qt.DisplayRole, rating)
         if is_read_only:
-            self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
+            self.setFlags(Qt.ItemFlag.ItemIsSelectable|Qt.ItemFlag.ItemIsEnabled)
 
 
 class DateTableWidgetItem(QTableWidgetItem):
@@ -303,10 +303,10 @@ class DateTableWidgetItem(QTableWidgetItem):
         if (date_read == UNDEFINED_DATE) and default_to_today:
             date_read = now()
         if is_read_only:
-            QTableWidgetItem.__init__(self, format_date(date_read, fmt), QTableWidgetItem.UserType)
-            self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
+            QTableWidgetItem.__init__(self, format_date(date_read, fmt), QTableWidgetItem.ItemType.UserType)
+            self.setFlags(Qt.ItemFlag.ItemIsSelectable|Qt.ItemFlag.ItemIsEnabled)
         else:
-            QTableWidgetItem.__init__(self, '', QTableWidgetItem.UserType)
+            QTableWidgetItem.__init__(self, '', QTableWidgetItem.ItemType.UserType)
             dt = UNDEFINED_QDATETIME if date_read is None else QDateTime(date_read)
             self.setData(Qt.DisplayRole, dt)
 
@@ -322,7 +322,7 @@ class CheckableTableWidgetItem(QTableWidgetItem):
 
     def __init__(self, checked=False, is_tristate=False):
         QTableWidgetItem.__init__(self, '')
-        self.setFlags(Qt.ItemFlags(Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled ))
+        self.setFlags(Qt.ItemFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled ))
         if is_tristate:
             self.setFlags(self.flags() | Qt.ItemIsTristate)
         if checked:
@@ -353,7 +353,7 @@ class TextIconWidgetItem(QTableWidgetItem):
         if tooltip:
             self.setToolTip(tooltip)
         if is_read_only:
-            self.setFlags(Qt.ItemIsSelectable|Qt.ItemIsEnabled)
+            self.setFlags(Qt.ItemFlag.ItemIsSelectable|Qt.ItemFlag.ItemIsEnabled)
 
 
 class ReadOnlyTextIconWidgetItem(ReadOnlyTableWidgetItem):
