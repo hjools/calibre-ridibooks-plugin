@@ -30,12 +30,25 @@ USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
               '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
 
-def open_url(url, timeout=30):
+def open_url(url, timeout=30, retries=3):
     # Ridibooks' WAF returns HTTP 403 to calibre's mechanize browser regardless
     # of User-Agent, but accepts a plain stdlib urllib request with a normal
     # browser User-Agent. Returns the raw response bytes.
-    req = Request(url, headers={'User-Agent': USER_AGENT, 'Accept': '*/*'})
-    return urlopen(req, timeout=timeout).read()
+    #
+    # The WAF also intermittently resets the connection (WinError 10054 during
+    # the TLS handshake) when it sees several requests in quick succession. A
+    # single dropped connection would otherwise surface as "Found 0 results",
+    # so retry a few times with a short backoff before giving up.
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = Request(url, headers={'User-Agent': USER_AGENT, 'Accept': '*/*'})
+            return urlopen(req, timeout=timeout).read()
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(1.0 * (attempt + 1))
+    raise last_err
 
 
 # Suffixes Ridibooks appends to category names (e.g. "BL 소설 e북" -> "BL").
@@ -57,7 +70,7 @@ class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Helen Lee <ju.helen.lee@gmail.com>'
-    version = (1, 0, 7)
+    version = (1, 0, 8)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -179,11 +192,30 @@ class RidiBooks(Source):
                         authors=authors, timeout=timeout)
             if authors:
                 # Ridibooks ANDs keyword terms, and calibre's author tokens can
-                # be a partial name that matches nothing. Retry with title only.
+                # be a partial/mangled CJK name that matches nothing (e.g.
+                # '구보 유키야' -> '유키야'). Broaden the *search* to title-only,
+                # but keep ranking the wider result set by the original author so
+                # a same-titled book by a different author doesn't win.
                 log.info('No matches with title and author, retrying with title only')
-                return self.identify(log, result_queue, abort, title=title,
-                        authors=None, timeout=timeout)
-            log.error('No matches found with query: %r' % query)
+                title_query = self.create_query(log, title=title,
+                        identifiers=identifiers)
+                if title_query is not None:
+                    try:
+                        log.info('Querying: %s' % title_query)
+                        raw = json.loads(open_url(title_query, timeout=timeout))
+                    except Exception as e:
+                        log.exception('Failed to make identify query: %r'
+                                % title_query)
+                        return as_unicode(e)
+                    if raw:
+                        self._parse_search_results(log, isbn, title, authors,
+                                raw, matches, timeout)
+
+        if abort.is_set():
+            return
+
+        if not matches:
+            log.error('No matches found for title=%r authors=%r' % (title, authors))
             return
 
         from calibre_plugins.ridibooks.worker import Worker
@@ -302,7 +334,8 @@ if __name__ == '__main__': # tests
                 'title':u'테라리움 어드벤처 1화'
             },
             [
-                title_test(u'테라리움 어드벤처 1화'),
+                # Volume titles are normalised to "<series> N권" (1화 -> 1권).
+                title_test(u'테라리움 어드벤처 1권'),
                 authors_test([u'수하수하'])
             ]
         ),
@@ -341,7 +374,9 @@ if __name__ == '__main__': # tests
                 'title':u"테메레르 큰바다뱀",
             },
             [
-                title_test(u"테메레르 6권 - 큰바다뱀들의 땅", exact=True),
+                # Volume titles are normalised to "<series> N권" (the subtitle
+                # "- 큰바다뱀들의 땅" is dropped to match Korean series file naming).
+                title_test(u"테메레르 6권", exact=True),
                 authors_test([u'나오미 노빅', u'공보경(역자)']),
                 series_test(u'테메레르', 6.0)
             ]
@@ -352,7 +387,9 @@ if __name__ == '__main__': # tests
                 'title':u"나홀로 여행 컨설팅북",
             },
             [
-                title_test(u"나홀로 여행 컨설팅북", exact=True),
+                # Ridibooks now serves a revised edition ("개정판 | … (2판)"), so
+                # match on the core title tokens rather than an exact string.
+                title_test(u"나홀로 여행 컨설팅북"),
                 authors_test([u'이주영']),
             ]
         )

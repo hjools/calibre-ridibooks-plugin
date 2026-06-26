@@ -1,5 +1,20 @@
 # Code review — calibre-ridibooks-plugin
 
+> **Status (2026-06-26, v1.0.8): network resilience + fallback matching.**
+> Ridibooks' WAF intermittently resets the TLS connection (WinError 10054)
+> when several requests arrive in quick succession; a single dropped connection
+> surfaced to the user as "Found 0 results". `open_url` now retries with a short
+> backoff (3 attempts) before giving up, so transient resets no longer fail a
+> lookup. Two matching fixes shipped alongside: (1) the title-only fallback
+> (used when an author-narrowed search returns nothing — calibre mangles short
+> CJK author names, e.g. '구보 유키야' -> '유키야') now still *ranks* the broader
+> result set by the original author, so a same-titled book by the wrong author
+> no longer wins; (2) `_apply_series` no longer fabricates a "0권" suffix for
+> standalone books that Ridibooks flags as a one-entry series with volume 0.
+> The in-tree test suite was also brought in line with the current behaviour
+> (volume titles normalise to "<series> N권"; Ridibooks now serves a revised
+> edition of one test book) and all six cases pass end-to-end on calibre 9.9.
+>
 > **Status (2026-06-24): all findings below have been addressed in v1.0.1.**
 >
 > **Fixed:** the three live breakers (ISO publish-date parsing, 0–1→0–5 rating

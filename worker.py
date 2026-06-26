@@ -266,15 +266,18 @@ class Worker(Thread): # Get details
         return series_title, (series_unit or query_unit), volume, volume_id
 
     def _apply_series(self, mi, series_title, unit, volume, og_title):
-        if series_title:
+        # Only treat it as a numbered series volume when the volume is a real
+        # positive number. Some standalone books are flagged as a one-entry
+        # series with volume 0, which must not become "<title> 0권".
+        if series_title and volume and volume >= 1:
             mi.series = series_title
-            if volume is not None:
-                mi.series_index = float(volume)
-                # Normalise the title to "<series> <N><unit>", e.g. "고귀한 황후 4권".
-                mi.title = '%s %d%s' % (series_title, volume, unit or '권')
+            mi.series_index = float(volume)
+            # Normalise the title to "<series> <N><unit>", e.g. "고귀한 황후 4권".
+            mi.title = '%s %d%s' % (series_title, volume, unit or '권')
             return
 
-        # Not a grouped series: derive a volume number from the title text.
+        # Not a grouped series (or no real volume): derive a volume number from
+        # the title text.
         if og_title.endswith('권'):
             m = re.search(r'(.*)\s*(\d+)권', og_title)
         else:
