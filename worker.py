@@ -289,6 +289,12 @@ class Worker(Thread): # Get details
         # Drop the table-of-contents (chapter list); keep synopsis/author note.
         desc = re.split(r'<(?:b|strong)>\s*&lt;\s*목차\s*&gt;\s*</(?:b|strong)>',
                         desc)[0]
+        # Strip embedded media (banner images, video trailers); calibre's
+        # comment renderer lags badly trying to fetch/display them.
+        desc = re.sub(r'<(video|audio|iframe|object|picture|svg|figure)\b[^>]*>.*?</\1\s*>',
+                      '', desc, flags=re.I | re.S)
+        desc = re.sub(r'<(?:img|video|audio|source|iframe|embed|track|object|picture|svg)\b[^>]*>',
+                      '', desc, flags=re.I)
         desc = desc.replace('\r\n', '\n').replace('\r', '\n').strip()
         # Plain-text line breaks -> HTML paragraphs (existing <b>/entities kept).
         paras = [p.replace('\n', '<br/>')
