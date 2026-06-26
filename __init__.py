@@ -57,7 +57,7 @@ class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Helen Lee <ju.helen.lee@gmail.com>'
-    version = (1, 0, 6)
+    version = (1, 0, 7)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -215,28 +215,30 @@ class RidiBooks(Source):
         if not search_result:
             return
         title_tokens = list(self.get_title_tokens(orig_title))
-        author_tokens = list(self.get_author_tokens(orig_authors, True))
+        # Compare against the raw author string: calibre's get_author_tokens
+        # returns nothing for short CJK names (e.g. '연비'), which would drop
+        # author discrimination entirely.
+        query_author = orig_authors[0].replace(' ', '') if orig_authors else ''
 
         import difflib
         similarities = []
-        for i in range(len(search_result)):
-            book = search_result[i]
-            title = book['title']
-            author = book['author']
-
-            log.info('Compare %s (%s) with %s (%s)' % (title, author, 
-                        ' '.join(title_tokens), 
-                        ' '.join(author_tokens)))
-            title_similarity = difflib.SequenceMatcher(None,
+        for book in search_result:
+            title = book.get('title') or ''
+            author = book.get('author') or ''
+            score = difflib.SequenceMatcher(None,
                     title.replace(' ', ''), ''.join(title_tokens)).ratio()
-            # Only factor in the author when one was supplied, otherwise the
-            # (empty) author comparison zeroes out every score.
-            if author_tokens:
+            if query_author:
+                # Soft weight: a non-matching author lowers but doesn't zero the
+                # score (the supplied author may be romanised/partial).
                 author_similarity = difflib.SequenceMatcher(None,
-                        author.replace(' ', ''), ''.join(author_tokens)).ratio()
-                similarities.append(title_similarity * author_similarity)
-            else:
-                similarities.append(title_similarity)
+                        author.replace(' ', ''), query_author).ratio()
+                score *= 0.2 + 0.8 * author_similarity
+            # Prefer the novel/ebook over a webtoon/comic edition of a title.
+            pcat = book.get('parent_category_name') or ''
+            if '웹툰' in pcat or '만화' in pcat:
+                score *= 0.5
+            log.info('Compare %r (%s | %s): %.3f' % (title, author, pcat, score))
+            similarities.append(score)
 
         if not similarities:
             return
