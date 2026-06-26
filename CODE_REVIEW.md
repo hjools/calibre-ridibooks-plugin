@@ -25,9 +25,13 @@
 > was reworked: the series name comes from the embedded `bookDetail` object,
 > the volume index is taken from the searched title (Ridibooks' search always
 > returns volume 1 of a grouped series, so the page can't tell which volume the
-> user has), and the book title is normalised to `<series> <N>권`. End-to-end verified:
-> identify by id and by title/author, plus cover download, all return correct
-> data on calibre 9.9.
+> user has), and the book title is normalised to `<series> <N>권`. Each volume's
+> own book id (from the page's series list) is used as the `ridibooks`
+> identifier and cover URL, so per-volume cover art is fetched correctly and a
+> re-download self-corrects the per-volume ISBN/pubdate (the first title-search
+> pass still reports volume 1's ISBN, since it lands on that page). End-to-end
+> verified: identify by id and by title/author, plus cover download, all return
+> correct data on calibre 9.9.
 >
 > **Intentionally deferred:** Qt6 *enum scoping* (e.g. `Qt.Checked`) was left on
 > the short-name form — the plugin now loads and initialises cleanly on calibre

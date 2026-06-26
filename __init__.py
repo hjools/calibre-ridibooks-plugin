@@ -57,7 +57,7 @@ class RidiBooks(Source):
     name = 'RidiBooks'
     description = _('Downloads metadata and covers from ridibooks.com')
     author = 'Helen Lee <ju.helen.lee@gmail.com>'
-    version = (1, 0, 4)
+    version = (1, 0, 5)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])

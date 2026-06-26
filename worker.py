@@ -119,6 +119,13 @@ class Worker(Thread): # Get details
         y = x[1].split("?_")
         ridibooks_id = y[0]
 
+        # Resolve the series and the specific volume the user wants. Ridibooks'
+        # search lands on volume 1, so use that volume's own book id (later
+        # volumes can have different cover art and a distinct store page). Using
+        # it as the identifier also keeps each volume's cover cache distinct.
+        series_title, series_unit, volume, volume_id = self._resolve_volume(root, detail)
+        effective_id = volume_id or ridibooks_id
+
         isbn = _find_meta(meta, 'books:isbn')
         # For age-restricted (19+) titles Ridibooks' og:image is a generic
         # "cover_adult.png" placeholder, while the real cover is served openly
@@ -126,7 +133,7 @@ class Worker(Thread): # Get details
         # always fetch the real cover; when off, use og:image (the SFW
         # placeholder for adult titles, the real cover for everything else).
         if cfg.plugin_prefs[cfg.STORE_NAME].get(cfg.KEY_ADULT_COVERS, True):
-            cover_url = 'https://img.ridicdn.net/cover/%s/xxlarge' % ridibooks_id
+            cover_url = 'https://img.ridicdn.net/cover/%s/xxlarge' % effective_id
         else:
             cover_url = _find_meta(meta, 'og:image')
 
@@ -137,7 +144,7 @@ class Worker(Thread): # Get details
             authors.extend([_ + u'(역자)' for _ in _format_list(book_info['translator']['name'])])
 
         mi = Metadata(title, authors)
-        mi.set_identifier('ridibooks', ridibooks_id)
+        mi.set_identifier('ridibooks', effective_id)
 
         mi.cover_url = cover_url
         mi.has_cover = bool(cover_url)
@@ -164,15 +171,15 @@ class Worker(Thread): # Get details
 
         if isbn:
             mi.isbn = isbn
-        if ridibooks_id:
+        if effective_id:
             if isbn:
-                self.plugin.cache_isbn_to_identifier(isbn, ridibooks_id)
+                self.plugin.cache_isbn_to_identifier(isbn, effective_id)
             if cover_url:
-                self.plugin.cache_identifier_to_cover_url(ridibooks_id, cover_url)
+                self.plugin.cache_identifier_to_cover_url(effective_id, cover_url)
 
         mi.tags = self.parse_tags(root, book_info)
 
-        self._apply_series(mi, detail, title)
+        self._apply_series(mi, series_title, series_unit, volume, title)
 
         mi.languages = ['kor']
         mi.source_relevance = self.relevance
@@ -233,21 +240,38 @@ class Worker(Thread): # Get details
             return None, None
         return int(m.group(1)), (m.group(2) or None)
 
-    def _apply_series(self, mi, detail, og_title):
+    def _series_volume_map(self, root):
+        # {volume_number: book_id} from the series list embedded in the page.
+        out = {}
+        for li in root.xpath('//li[contains(@class, "js_series_book_list")]'):
+            bid = li.get('data-id')
+            vol = li.get('data-volume')
+            if bid and vol and vol.isdigit():
+                out[int(vol)] = bid
+        return out
+
+    def _resolve_volume(self, root, detail):
+        '''Return (series_title, unit, volume, volume_id).
+
+        Ridibooks' search lands on volume 1 of a grouped series, so the volume
+        number is taken from the searched title (the user's file name), and
+        volume_id is that volume's own book id (used for its specific cover),
+        looked up from the page's series list.'''
         series_title, series_unit, page_volume = self._series_info(detail)
         query_volume, query_unit = self._parse_volume(self.query_title)
+        volume = query_volume if query_volume is not None else page_volume
+        volume_id = None
+        if series_title and volume is not None:
+            volume_id = self._series_volume_map(root).get(volume)
+        return series_title, (series_unit or query_unit), volume, volume_id
 
+    def _apply_series(self, mi, series_title, unit, volume, og_title):
         if series_title:
-            # The search always lands on volume 1, so prefer the volume number
-            # from the title calibre searched for (the user's file name).
-            volume = query_volume if query_volume is not None else page_volume
             mi.series = series_title
             if volume is not None:
                 mi.series_index = float(volume)
-                # Normalise the title to "<series> <N><unit>" to match the
-                # user's existing Korean series naming, e.g. "고귀한 황후 4권".
-                unit = series_unit or query_unit or '권'
-                mi.title = '%s %d%s' % (series_title, volume, unit)
+                # Normalise the title to "<series> <N><unit>", e.g. "고귀한 황후 4권".
+                mi.title = '%s %d%s' % (series_title, volume, unit or '권')
             return
 
         # Not a grouped series: derive a volume number from the title text.
